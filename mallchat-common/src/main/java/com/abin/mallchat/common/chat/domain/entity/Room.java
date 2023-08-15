@@ -1,9 +1,12 @@
 package com.abin.mallchat.common.chat.domain.entity;
 
+import com.abin.mallchat.common.chat.domain.enums.HotFlagEnum;
+import com.abin.mallchat.common.chat.domain.enums.RoomTypeEnum;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -12,11 +15,11 @@ import java.util.Date;
 
 /**
  * <p>
- * 会话表
+ * 房间表
  * </p>
  *
  * @author <a href="https://github.com/zongzibinbin">abin</a>
- * @since 2023-03-25
+ * @since 2023-07-16
  */
 @Data
 @EqualsAndHashCode(callSuper = false)
@@ -24,7 +27,6 @@ import java.util.Date;
 public class Room implements Serializable {
 
     private static final long serialVersionUID = 1L;
-
     /**
      * id
      */
@@ -32,13 +34,7 @@ public class Room implements Serializable {
     private Long id;
 
     /**
-     * 会话名
-     */
-    @TableField("name")
-    private String name;
-
-    /**
-     * 会话类型 1大群聊 2沸点
+     * 房间类型 1群聊 2单聊
      *
      * @see com.abin.mallchat.common.chat.domain.enums.RoomTypeEnum
      */
@@ -46,10 +42,30 @@ public class Room implements Serializable {
     private Integer type;
 
     /**
-     * 最后活跃时间-排序
+     * 是否全员展示 0否 1是
+     *
+     * @see com.abin.mallchat.common.chat.domain.enums.HotFlagEnum
+     */
+    @TableField("hot_flag")
+    private Integer hotFlag;
+
+    /**
+     * 群最后消息的更新时间（热点群不需要写扩散，更新这里就行）
      */
     @TableField("active_time")
     private Date activeTime;
+
+    /**
+     * 最后一条消息id
+     */
+    @TableField("last_msg_id")
+    private Long lastMsgId;
+
+    /**
+     * 额外信息（根据不同类型房间有不同存储的东西）
+     */
+    @TableField("ext_json")
+    private String extJson;
 
     /**
      * 创建时间
@@ -64,4 +80,18 @@ public class Room implements Serializable {
     private Date updateTime;
 
 
+    @JsonIgnore
+    public boolean isHotRoom() {
+        return HotFlagEnum.of(this.hotFlag) == HotFlagEnum.YES;
+    }
+
+    @JsonIgnore
+    public boolean isRoomFriend() {
+        return RoomTypeEnum.of(this.type) == RoomTypeEnum.FRIEND;
+    }
+
+    @JsonIgnore
+    public boolean isRoomGroup() {
+        return RoomTypeEnum.of(this.hotFlag) == RoomTypeEnum.GROUP;
+    }
 }

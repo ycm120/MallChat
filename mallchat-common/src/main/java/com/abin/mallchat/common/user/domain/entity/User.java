@@ -28,6 +28,8 @@ public class User implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    public static Long UID_SYSTEM = 1L;//系统uid
+
     /**
      * 用户id
      */
@@ -57,6 +59,12 @@ public class User implements Serializable {
      */
     @TableField("open_id")
     private String openId;
+
+    /**
+     * 上下线状态 1在线 2离线
+     */
+    @TableField("active_status")
+    private Integer activeStatus;
 
     /**
      * 最后上下线时间

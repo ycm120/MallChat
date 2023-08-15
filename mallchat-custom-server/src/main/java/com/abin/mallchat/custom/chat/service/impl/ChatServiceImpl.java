@@ -5,27 +5,32 @@ import cn.hutool.core.collection.CollectionUtil;
 import cn.hutool.core.date.DateUnit;
 import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.lang.Pair;
-import com.abin.mallchat.common.chat.dao.MessageDao;
-import com.abin.mallchat.common.chat.dao.MessageMarkDao;
-import com.abin.mallchat.common.chat.dao.RoomDao;
-import com.abin.mallchat.common.chat.domain.entity.Message;
-import com.abin.mallchat.common.chat.domain.entity.MessageMark;
-import com.abin.mallchat.common.chat.domain.entity.Room;
+import com.abin.mallchat.common.chat.dao.*;
+import com.abin.mallchat.common.chat.domain.dto.MsgReadInfoDTO;
+import com.abin.mallchat.common.chat.domain.entity.*;
 import com.abin.mallchat.common.chat.domain.enums.MessageMarkActTypeEnum;
 import com.abin.mallchat.common.chat.domain.enums.MessageTypeEnum;
+import com.abin.mallchat.common.chat.domain.vo.response.ChatMessageResp;
+import com.abin.mallchat.common.chat.service.ContactService;
+import com.abin.mallchat.common.chat.service.cache.RoomCache;
+import com.abin.mallchat.common.chat.service.cache.RoomGroupCache;
 import com.abin.mallchat.common.common.annotation.RedissonLock;
+import com.abin.mallchat.common.common.domain.enums.NormalOrNoEnum;
 import com.abin.mallchat.common.common.domain.vo.request.CursorPageBaseReq;
 import com.abin.mallchat.common.common.domain.vo.response.CursorPageBaseResp;
 import com.abin.mallchat.common.common.event.MessageSendEvent;
 import com.abin.mallchat.common.common.utils.AssertUtil;
 import com.abin.mallchat.common.user.dao.UserDao;
+import com.abin.mallchat.common.user.domain.entity.User;
 import com.abin.mallchat.common.user.domain.enums.ChatActiveStatusEnum;
 import com.abin.mallchat.common.user.domain.enums.RoleEnum;
+import com.abin.mallchat.common.user.domain.vo.response.ws.ChatMemberResp;
 import com.abin.mallchat.common.user.service.IRoleService;
-import com.abin.mallchat.common.user.service.cache.ItemCache;
 import com.abin.mallchat.common.user.service.cache.UserCache;
 import com.abin.mallchat.custom.chat.domain.vo.request.*;
-import com.abin.mallchat.custom.chat.domain.vo.response.*;
+import com.abin.mallchat.custom.chat.domain.vo.response.ChatMemberListResp;
+import com.abin.mallchat.custom.chat.domain.vo.response.ChatMemberStatisticResp;
+import com.abin.mallchat.custom.chat.domain.vo.response.ChatMessageReadResp;
 import com.abin.mallchat.custom.chat.service.ChatService;
 import com.abin.mallchat.custom.chat.service.adapter.MemberAdapter;
 import com.abin.mallchat.custom.chat.service.adapter.MessageAdapter;
@@ -36,6 +41,7 @@ import com.abin.mallchat.custom.chat.service.strategy.mark.MsgMarkFactory;
 import com.abin.mallchat.custom.chat.service.strategy.msg.AbstractMsgHandler;
 import com.abin.mallchat.custom.chat.service.strategy.msg.MsgHandlerFactory;
 import com.abin.mallchat.custom.chat.service.strategy.msg.RecallMsgHandler;
+import com.abin.mallchat.transaction.service.MQProducer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,6 +50,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.annotation.Nullable;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -72,11 +79,23 @@ public class ChatServiceImpl implements ChatService {
     @Autowired
     private MessageMarkDao messageMarkDao;
     @Autowired
-    private ItemCache itemCache;
+    private RoomFriendDao roomFriendDao;
     @Autowired
     private IRoleService iRoleService;
     @Autowired
     private RecallMsgHandler recallMsgHandler;
+    @Autowired
+    private ContactService contactService;
+    @Autowired
+    private ContactDao contactDao;
+    @Autowired
+    private RoomCache roomCache;
+    @Autowired
+    private GroupMemberDao groupMemberDao;
+    @Autowired
+    private RoomGroupCache roomGroupCache;
+    @Autowired
+    private MQProducer mqProducer;
 
     /**
      * 发送消息
@@ -84,6 +103,7 @@ public class ChatServiceImpl implements ChatService {
     @Override
     @Transactional
     public Long sendMsg(ChatMessageReq request, Long uid) {
+        check(request, uid);
         AbstractMsgHandler msgHandler = MsgHandlerFactory.getStrategyNoNull(request.getMsgType());//todo 这里先不扩展，后续再改
         msgHandler.checkMsg(request, uid);
         //同步获取消息的跳转链接标题
@@ -93,6 +113,24 @@ public class ChatServiceImpl implements ChatService {
         //发布消息发送事件
         applicationEventPublisher.publishEvent(new MessageSendEvent(this, insert.getId()));
         return insert.getId();
+    }
+
+    private void check(ChatMessageReq request, Long uid) {
+        Room room = roomCache.get(request.getRoomId());
+        if (room.isHotRoom()) {//全员群跳过校验
+            return;
+        }
+        if (room.isRoomFriend()) {
+            RoomFriend roomFriend = roomFriendDao.getByRoomId(request.getRoomId());
+            AssertUtil.equal(NormalOrNoEnum.NORMAL.getStatus(), roomFriend.getStatus(), "您已经被对方拉黑");
+            AssertUtil.isTrue(uid.equals(roomFriend.getUid1()) || uid.equals(roomFriend.getUid2()), "您已经被对方拉黑");
+        }
+        if (room.isRoomGroup()) {
+            RoomGroup roomGroup = roomGroupCache.get(request.getRoomId());
+            GroupMember member = groupMemberDao.getMember(roomGroup.getId(), uid);
+            AssertUtil.isNotEmpty(member, "您已经被移除该群");
+        }
+
     }
 
     @Override
@@ -107,26 +145,26 @@ public class ChatServiceImpl implements ChatService {
     }
 
     @Override
-    public CursorPageBaseResp<ChatMemberResp> getMemberPage(CursorPageBaseReq request) {
+    public CursorPageBaseResp<ChatMemberResp> getMemberPage(List<Long> memberUidList, CursorPageBaseReq request) {
         Pair<ChatActiveStatusEnum, String> pair = ChatMemberHelper.getCursorPair(request.getCursor());
         ChatActiveStatusEnum activeStatusEnum = pair.getKey();
         String timeCursor = pair.getValue();
         List<ChatMemberResp> resultList = new ArrayList<>();//最终列表
         Boolean isLast = Boolean.FALSE;
         if (activeStatusEnum == ChatActiveStatusEnum.ONLINE) {//在线列表
-            CursorPageBaseResp<Pair<Long, Double>> cursorPage = userCache.getOnlineCursorPage(new CursorPageBaseReq(request.getPageSize(), timeCursor));
-            resultList.addAll(memberAdapter.buildMember(cursorPage.getList(), ChatActiveStatusEnum.ONLINE));//添加在线列表
+            CursorPageBaseResp<User> cursorPage = userDao.getCursorPage(memberUidList, new CursorPageBaseReq(request.getPageSize(), timeCursor), ChatActiveStatusEnum.ONLINE);
+            resultList.addAll(MemberAdapter.buildMember(cursorPage.getList()));//添加在线列表
             if (cursorPage.getIsLast()) {//如果是最后一页,从离线列表再补点数据
-                Integer leftSize = request.getPageSize() - cursorPage.getList().size();
-                cursorPage = userCache.getOfflineCursorPage(new CursorPageBaseReq(leftSize, null));
-                resultList.addAll(memberAdapter.buildMember(cursorPage.getList(), ChatActiveStatusEnum.OFFLINE));//添加离线线列表
                 activeStatusEnum = ChatActiveStatusEnum.OFFLINE;
+                Integer leftSize = request.getPageSize() - cursorPage.getList().size();
+                cursorPage = userDao.getCursorPage(memberUidList, new CursorPageBaseReq(leftSize, null), ChatActiveStatusEnum.OFFLINE);
+                resultList.addAll(MemberAdapter.buildMember(cursorPage.getList()));//添加离线线列表
             }
             timeCursor = cursorPage.getCursor();
             isLast = cursorPage.getIsLast();
         } else if (activeStatusEnum == ChatActiveStatusEnum.OFFLINE) {//离线列表
-            CursorPageBaseResp<Pair<Long, Double>> cursorPage = userCache.getOfflineCursorPage(new CursorPageBaseReq(request.getPageSize(), timeCursor));
-            resultList.addAll(memberAdapter.buildMember(cursorPage.getList(), ChatActiveStatusEnum.OFFLINE));//添加离线线列表
+            CursorPageBaseResp<User> cursorPage = userDao.getCursorPage(memberUidList, new CursorPageBaseReq(request.getPageSize(), timeCursor), ChatActiveStatusEnum.OFFLINE);
+            resultList.addAll(MemberAdapter.buildMember(cursorPage.getList()));//添加离线线列表
             timeCursor = cursorPage.getCursor();
             isLast = cursorPage.getIsLast();
         }
@@ -136,23 +174,24 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     public CursorPageBaseResp<ChatMessageResp> getMsgPage(ChatMessagePageReq request, Long receiveUid) {
-        CursorPageBaseResp<Message> cursorPage = messageDao.getCursorPage(request.getRoomId(), request);
+        //用最后一条消息id，来限制被踢出的人能看见的最大一条消息
+        Long lastMsgId = getLastMsgId(request.getRoomId(), receiveUid);
+        CursorPageBaseResp<Message> cursorPage = messageDao.getCursorPage(request.getRoomId(), request, lastMsgId);
         if (cursorPage.isEmpty()) {
             return CursorPageBaseResp.empty();
         }
         return CursorPageBaseResp.init(cursorPage, getMsgRespBatch(cursorPage.getList(), receiveUid));
     }
 
-    @Override
-    public CursorPageBaseResp<ChatRoomResp> getRoomPage(CursorPageBaseReq request, Long uid) {
-        CursorPageBaseResp<Room> cursorPage = roomDao.getCursorPage(request);
-        ArrayList<Room> rooms = new ArrayList<>(cursorPage.getList());
-        if (request.isFirstPage()) {
-            //第一页插入置顶的大群聊
-            Room group = roomDao.getById(ROOM_GROUP_ID);
-            rooms.add(0, group);
+    private Long getLastMsgId(Long roomId, Long receiveUid) {
+        Room room = roomCache.get(roomId);
+        AssertUtil.isNotEmpty(room, "房间号有误");
+        if (room.isHotRoom()) {
+            return null;
         }
-        return CursorPageBaseResp.init(cursorPage, RoomAdapter.buildResp(rooms));
+        AssertUtil.isNotEmpty(receiveUid, "请先登录");
+        Contact contact = contactDao.get(receiveUid, roomId);
+        return contact.getLastMsgId();
     }
 
     @Override
@@ -203,6 +242,50 @@ public class ChatServiceImpl implements ChatService {
                     }).collect(Collectors.toList());
         }
         return null;
+    }
+
+    @Override
+    public Collection<MsgReadInfoDTO> getMsgReadInfo(Long uid, ChatMessageReadInfoReq request) {
+        List<Message> messages = messageDao.listByIds(request.getMsgIds());
+        messages.forEach(message -> {
+            AssertUtil.equal(uid, message.getFromUid(), "只能查询自己发送的消息");
+        });
+        return contactService.getMsgReadInfo(messages, request.isNeedUnread()).values();
+    }
+
+    @Override
+    public CursorPageBaseResp<ChatMessageReadResp> getReadPage(@Nullable Long uid, ChatMessageReadReq request) {
+        Message message = messageDao.getById(request.getMsgId());
+        AssertUtil.isNotEmpty(message, "消息id有误");
+        AssertUtil.equal(uid, message.getFromUid(), "只能查看自己的消息");
+        CursorPageBaseResp<Contact> page;
+        if (request.getSearchType() == 1) {//已读
+            page = contactDao.getReadPage(message, request);
+        } else {
+            page = contactDao.getUnReadPage(message, request);
+        }
+        if (CollectionUtil.isEmpty(page.getList())) {
+            return CursorPageBaseResp.empty();
+        }
+        return CursorPageBaseResp.init(page, RoomAdapter.buildReadResp(page.getList()));
+    }
+
+    @Override
+    @RedissonLock(key = "#uid")
+    public void msgRead(Long uid, ChatMessageMemberReq request) {
+        Contact contact = contactDao.get(uid, request.getRoomId());
+        if (Objects.nonNull(contact)) {
+            Contact update = new Contact();
+            update.setId(contact.getId());
+            update.setReadTime(new Date());
+            contactDao.updateById(update);
+        } else {
+            Contact insert = new Contact();
+            insert.setUid(uid);
+            insert.setRoomId(request.getRoomId());
+            insert.setReadTime(new Date());
+            contactDao.save(insert);
+        }
     }
 
     private void checkRecall(Long uid, Message message) {

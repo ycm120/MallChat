@@ -3,8 +3,10 @@ package com.abin.mallchat.custom.common.event.listener;
 import com.abin.mallchat.common.common.event.UserOnlineEvent;
 import com.abin.mallchat.common.user.dao.UserDao;
 import com.abin.mallchat.common.user.domain.entity.User;
+import com.abin.mallchat.common.user.domain.enums.ChatActiveStatusEnum;
 import com.abin.mallchat.common.user.service.IpService;
 import com.abin.mallchat.common.user.service.cache.UserCache;
+import com.abin.mallchat.common.user.service.impl.PushService;
 import com.abin.mallchat.custom.user.service.WebSocketService;
 import com.abin.mallchat.custom.user.service.adapter.WSAdapter;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +33,8 @@ public class UserOnlineListener {
     private WSAdapter wsAdapter;
     @Autowired
     private IpService ipService;
+    @Autowired
+    private PushService pushService;
 
     @Async
     @EventListener(classes = UserOnlineEvent.class)
@@ -38,7 +42,7 @@ public class UserOnlineListener {
         User user = event.getUser();
         userCache.online(user.getId(), user.getLastOptTime());
         //推送给所有在线用户，该用户登录成功
-        webSocketService.sendToAllOnline(wsAdapter.buildOnlineNotifyResp(event.getUser()));
+        pushService.sendPushMsg(wsAdapter.buildOnlineNotifyResp(event.getUser()));
     }
 
     @Async
@@ -49,6 +53,7 @@ public class UserOnlineListener {
         update.setId(user.getId());
         update.setLastOptTime(user.getLastOptTime());
         update.setIpInfo(user.getIpInfo());
+        update.setActiveStatus(ChatActiveStatusEnum.ONLINE.getStatus());
         userDao.updateById(update);
         //更新用户ip详情
         ipService.refreshIpDetailAsync(user.getId());
