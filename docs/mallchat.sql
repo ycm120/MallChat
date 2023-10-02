@@ -218,7 +218,8 @@ CREATE TABLE `user_apply` (
   `create_time` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
   `update_time` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '修改时间',
   PRIMARY KEY (`id`) USING BTREE,
-  KEY `idx_target_id_uid_status` (`target_id`,`uid`,`status`) USING BTREE,
+  KEY `idx_uid_target_id` (`uid`,`target_id`) USING BTREE,
+  KEY `idx_target_id_read_status` (`target_id`,`read_status`) USING BTREE,
   KEY `idx_target_id` (`target_id`) USING BTREE,
   KEY `idx_create_time` (`create_time`) USING BTREE,
   KEY `idx_update_time` (`update_time`) USING BTREE
@@ -284,7 +285,7 @@ CREATE TABLE `room_group` (
 DROP TABLE IF EXISTS `group_member`;
 CREATE TABLE `group_member` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'id',
-  `group_id` bigint(20) NOT NULL COMMENT '群主id',
+  `group_id` bigint(20) NOT NULL COMMENT '群组id',
   `uid` bigint(20) NOT NULL COMMENT '成员uid',
   `role` int(11) NOT NULL COMMENT '成员角色 1群主 2管理员 3普通成员',
   `create_time` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
