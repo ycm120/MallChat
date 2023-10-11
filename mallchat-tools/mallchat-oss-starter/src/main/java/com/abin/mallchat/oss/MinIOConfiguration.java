@@ -1,16 +1,16 @@
-package com.abin.mallchat.common.common.config;
+package com.abin.mallchat.oss;
 
-import com.abin.mallchat.common.common.utils.oss.MinIOTemplate;
-import com.abin.mallchat.common.common.utils.oss.OssProperties;
 import io.minio.MinioClient;
 import lombok.SneakyThrows;
-import org.springframework.boot.autoconfigure.condition.*;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnClass({MinioClient.class})
 @EnableConfigurationProperties(OssProperties.class)
 @ConditionalOnExpression("${oss.enabled}")
 @ConditionalOnProperty(value = "oss.type", havingValue = "minio")
